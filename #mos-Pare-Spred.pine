@@ -1,0 +1,103 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © mos3298
+
+//@version=6
+indicator("#mos Pair Spread (A vs B) - EOD", overlay=false)
+
+// ===== 入力 =====
+calc_tf   = input.timeframe("D", "計算タイムフレーム（終値判断）")
+
+A_ticker  = input.symbol("NYMEX:RB1!", "Aのティッカー（例：NYMEX:RB1!）")
+B_ticker  = input.symbol("NYMEX:HO1!", "Bのティッカー（例：NYMEX:HO1!）")
+A_name_in = input.string("", "Aの表示名（空ならティッカーを使用）")
+B_name_in = input.string("", "Bの表示名（空ならティッカーを使用）")
+
+A_mult    = input.float(1.0, "A倍率（単位調整）", step=0.1)
+B_mult    = input.float(1.0, "B倍率（単位調整）", step=0.1)
+
+mode      = input.string("Difference (A - B)", "計算モード", options=["Difference (A - B)", "Ratio (A / B)"])
+invert    = input.bool(false, "符号反転（視覚用）")
+
+len_ma    = input.int(20, "平均/標準偏差の期間", minval=5)
+z_entry   = input.float(2.0, "Zエントリー閾値（±）", step=0.1)
+z_exit    = input.float(0.5, "Z手仕舞い閾値（絶対値）", step=0.1)
+
+// ===== 表示名の確定 =====
+A_name = (A_name_in == "") ? A_ticker : A_name_in
+B_name = (B_name_in == "") ? B_ticker : B_name_in
+
+// ===== データ取得（終値・指定TF）=====
+A_close = request.security(A_ticker, calc_tf, close, barmerge.gaps_off, barmerge.lookahead_off)
+B_close = request.security(B_ticker, calc_tf, close, barmerge.gaps_off, barmerge.lookahead_off)
+
+// ===== スプレッド =====
+difference = A_close * A_mult - B_close * B_mult
+ratio      = (B_close * B_mult != 0) ? (A_close * A_mult) / (B_close * B_mult) : na
+raw_spread = (mode == "Difference (A - B)") ? difference : ratio
+spread     = invert ? -raw_spread : raw_spread
+
+// 中央線（差：0、比率：1）
+midline = (mode == "Difference (A - B)") ? 0.0 : 1.0
+
+// ===== 統計 =====
+ma   = ta.sma(spread, len_ma)
+dev  = ta.stdev(spread, len_ma)
+z    = (dev != 0) ? (spread - ma) / dev : na
+
+// ===== シグナル（平均回帰） =====
+long_entry   = ta.crossunder(z, -z_entry)    // 行き過ぎ（下）→ Longスプレッド = A買 / B売
+short_entry  = ta.crossover(z,  z_entry)     // 行き過ぎ（上）→ Shortスプレッド = A売 / B買
+exit_signal  = ta.crossover(z, -z_exit) or ta.crossunder(z, z_exit) // 中庸へ回帰
+
+// ===== プロット（タイトルは定数＝固定文字列） =====
+plot(spread, color=color.new(color.gray, 0), title="Spread")
+plot(ma,     color=color.new(color.blue, 0), title="MA")
+uBand = ma + dev * z_entry
+lBand = ma - dev * z_entry
+plot(uBand, color=color.new(color.red, 0),  title="+Threshold")
+plot(lBand, color=color.new(color.teal, 0), title="-Threshold")
+hline(midline, "Mid", color=color.new(color.gray, 70))
+
+// Zをデータウィンドウで参照できるよう（非表示プロット）
+plot(z, color=color.new(color.purple, 0), title="Z-Score", display=display.none)
+
+// ===== ラベル（終値確定時にA/B名を含めて表示） =====
+var label lbl = na
+if barstate.islastconfirmedhistory
+    label.delete(lbl)
+    dir_txt = z >  z_entry ? "（拡大し過ぎ）→ Short候補: " + A_name + " 売 / " + B_name + " 買" :
+              z < -z_entry ? "（縮小し過ぎ）→ Long候補: "  + A_name + " 買 / " + B_name + " 売" : "様子見（中庸）"
+
+    body = "A=" + A_name + "  B=" + B_name + "\n" +
+           "Spread=" + str.tostring(spread, format.mintick) + "\n" +
+           "MA="     + str.tostring(ma,     format.mintick) + "\n" +
+           "Z="      + str.tostring(z,      format.mintick) + "\n" +
+           dir_txt
+
+    lbl := label.new(bar_index, spread, body, style=label.style_label_left, textcolor=color.white, color=color.new(color.black, 0))
+
+// ===== アラート（定数メッセージ） =====
+alertcondition(long_entry,  title="Long Spread Entry",  message="Z < -threshold: Long spread (Buy A / Sell B)")
+alertcondition(short_entry, title="Short Spread Entry", message="Z > +threshold: Short spread (Sell A / Buy B)")
+alertcondition(exit_signal, title="Exit (Mean Revert)", message="|Z| shrinking: Mean reversion (Exit candidate)")
+
+// ===== 簡易ヘッジ比率（B per A を表示） =====
+hedge_ratio = (B_close * B_mult != 0) ? (A_close * A_mult) / (B_close * B_mult) : na
+var table t = table.new(position.top_right, 2, 3, border_width=1)
+if barstate.islastconfirmedhistory
+    table.cell(t, 0, 0, "Z-Score", text_color=color.white, bgcolor=color.new(color.gray, 50))
+    table.cell(t, 1, 0, str.tostring(z, format.mintick), text_color=color.white, bgcolor=color.new(color.gray, 50))
+    table.cell(t, 0, 1, "A: " + A_name, text_color=color.white, bgcolor=color.new(color.gray, 50))
+    table.cell(t, 1, 1, "B: " + B_name, text_color=color.white, bgcolor=color.new(color.gray, 50))
+    table.cell(t, 0, 2, "Hedge(B per A)", text_color=color.white, bgcolor=color.new(color.gray, 50))
+    table.cell(t, 1, 2, str.tostring(hedge_ratio, format.mintick), text_color=color.white, bgcolor=color.new(color.gray, 50))
+
+// ===== 背景カラー（Zスコアに応じた状態表示） =====
+bgcolor(z < -z_entry ? color.new(color.green, 85) : z >  z_entry ? color.new(color.red,   85) : na, title = "背景状態表示")
+
+// ===== 出来高スプレッド（任意オプション）=====
+volA = request.security(A_ticker, calc_tf, volume)
+volB = request.security(B_ticker, calc_tf, volume)
+vol_spread = volA - volB
+plot(vol_spread, color=color.new(color.orange, 50), title="Volume Spread (A - B)", display=display.none)
+
