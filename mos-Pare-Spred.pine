@@ -1,3 +1,6 @@
+// This Pine Script® code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © mos3298
+
 //@version=6
 indicator("#mos Pair Spread (A vs B) - EOD", overlay=false)
 
@@ -108,4 +111,5 @@ volA = request.security(A_ticker, calc_tf, volume)
 volB = request.security(B_ticker, calc_tf, volume)
 vol_spread = volA - volB
 plot(vol_spread, color=color.new(color.orange, 50), title="Volume Spread (A - B)", display=display.none)
+
 
